@@ -1,0 +1,15 @@
+[package]
+name = "pulsar-backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crossbeam = "0.8.4"
+sysinfo = "0.36.1"
+
+[target.'cfg(windows)'.dependencies]  
+cpal = { version = "0.16.0", features = ["asio", "audio_thread_priority"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { version = "0.16.0", features = ["jack", "audio_thread_priority"] }
+
