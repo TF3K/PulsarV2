@@ -201,11 +201,12 @@ impl VoiceRenderer {
     }
         
     /// Get a reference to the current audio source for configuration
-    pub fn with_audio_source_mut<F, R>(&self, f: F) -> Option<R>
+    pub fn with_audio_source_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Box<dyn AudioSource>) -> R,
     {
-        self.audio_source.lock().ok().map(|mut source| f(&mut source))
+        let mut source = self.audio_source.lock().unwrap();
+        f(&mut source)
     }
 
     fn get_preferred_host() -> cpal::Host {
