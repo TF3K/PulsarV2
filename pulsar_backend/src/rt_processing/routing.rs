@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use spin::RwLock;
 
+use crate::rt_processing::performance::PerformanceMonitor;
+
 /// Trait for any renderable audio source.
-pub trait AudioSource: Send {
-    /// Fills output with audio.
-    /// - Non-interleaved, [channel][frame]
+/// Non-interleaved, [channel][frame]
+pub trait AudioSource: Send + Sync {
     fn render(&mut self, output: &mut [&mut [f32]], frames: usize, sample_rate: f32);
 }
 
@@ -39,9 +40,11 @@ impl Pan {
     }
 }
 
-/// Represents a routed audio source
+/// Represents a routed audio source.
+/// Note: we store a 'static trait object so it's straightforward to push
+/// Boxed adapters created from local types.
 pub struct RoutedSource {
-    pub source: Box<dyn AudioSource>,
+    pub source: Box<dyn AudioSource + 'static>,
     pub gain: f32,
     pub pan: Pan,
     pub bus: usize, // 0 = master, >0 = aux bus
@@ -73,7 +76,9 @@ impl Router {
         }
     }
 
-    pub fn add_source(&self, source: Box<dyn AudioSource>, gain: f32, pan: Pan, bus: usize) {
+    /// Accept a 'static boxed routing AudioSource.
+    /// We take &self because we mutate the internal RwLock, not `self` itself.
+    pub fn add_source(&self, source: Box<dyn AudioSource + 'static>, gain: f32, pan: Pan, bus: usize) {
         let mut guard = self.sources.write();
         guard.push(RoutedSource { source, gain, pan, bus });
     }
@@ -83,7 +88,7 @@ impl Router {
     }
 
     /// Process all sources → mix into interleaved output buffer
-    pub fn process(&mut self, output: &mut [f32]) {
+    pub fn process(&mut self, output: &mut [f32], perf_monitor: Option<&PerformanceMonitor>) {
         let frames = output.len() / self.channels;
 
         // zero master scratch
@@ -100,7 +105,7 @@ impl Router {
         // mix all sources into their assigned bus
         let mut guard = self.sources.write();
         for routed in guard.iter_mut() {
-            // temporary buffer for this source
+            // temporary buffer for this source [channel][frame]
             let mut temp: Vec<Vec<f32>> = (0..self.channels)
                 .map(|_| vec![0.0; frames])
                 .collect();
@@ -116,6 +121,7 @@ impl Router {
                 // stereo panning for mono → stereo
                 let (lg, rg) = routed.pan.gains();
                 for i in 0..frames {
+                    // assume source filled views[0] as mono
                     let s = views[0][i] * routed.gain;
                     bus_buffers[bus][0][i] += s * lg;
                     bus_buffers[bus][1][i] += s * rg;
@@ -144,6 +150,12 @@ impl Router {
             for ch in 0..self.channels {
                 output[i * self.channels + ch] = self.scratch[ch][i];
             }
+        }
+
+        let _guard = perf_monitor.map(|p| p.scoped_callback());
+
+        if let Some(monitor) = perf_monitor {
+            monitor.add_frames_processed(frames as u64);
         }
     }
 }
